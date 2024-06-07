@@ -24,6 +24,12 @@ type RaftSurfstore struct {
 	rpcConns   []*grpc.ClientConn
 	grpcServer *grpc.Server
 
+	//New Additions
+	peers           []string
+	pendingRequests []*chan PendingRequest
+	lastApplied     int64
+	nextIndex		[]int64
+
 	/*--------------- Chaos Monkey --------------*/
 	unreachableFrom map[int64]bool
 	UnimplementedRaftSurfstoreServer
