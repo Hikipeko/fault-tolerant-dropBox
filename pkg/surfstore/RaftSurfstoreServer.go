@@ -76,23 +76,19 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	if err := s.checkStatus(); err != nil {
 		return nil, err
 	}
-	s.raftStateMutex.Lock()
 	entry := UpdateOperation{
 		Term:         s.term,
 		FileMetaData: filemeta,
 	}
 	s.log = append(s.log, &entry)
-	s.raftStateMutex.Unlock()
 
 	// for simplicity, make updatefile blocking
 	s.sendPersistentHeartbeats(ctx)
 
 	// Ensure that leader commits first and then applies to the state machine
-	s.raftStateMutex.Lock()
 	// TODO: need to commit multiple cases
 	s.commitIndex = int64(len(s.log)) - 1
 	s.lastApplied = int64(len(s.log)) - 1
-	s.raftStateMutex.Unlock()
 
 	if entry.FileMetaData != nil {
 		return s.metaStore.UpdateFile(ctx, entry.FileMetaData)
@@ -278,7 +274,6 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 		if err := s.checkStatus(); err != nil {
 			return
 		}
-		s.raftStateMutex.RLock()
 		nextIndex := s.nextIndex[peerId] // initial: 0
 		prevLogTerm := int64(0)
 		if nextIndex > 0 {
@@ -294,13 +289,11 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			LeaderCommit: s.commitIndex,
 		}
 		log.Printf("Server %v [sendToFollower %v] term: %v, LeaderId: %v, PrevLogTerm: %v, PrevLogIndex: %v, Entries: %v, LeaderCommit: %v", s.id, peerId, appendEntriesInput.Term, appendEntriesInput.LeaderId, appendEntriesInput.PrevLogTerm, appendEntriesInput.PrevLogIndex, appendEntriesInput.Entries, appendEntriesInput.LeaderCommit)
-		s.raftStateMutex.RUnlock()
 
 		reply, err := client.AppendEntries(context.Background(), &appendEntriesInput)
 		// log.Println("Server", s.id, "[sendToFollower] Receiving output", "Term:", reply.Term, "Id:", reply.ServerId, "Success:", reply.Success, "Matched Index:", reply.MatchedIndex)
 
 		// response processing
-		s.raftStateMutex.Lock()
 		if err != nil {
 			// TODO: fix this
 			st, _ := status.FromError(err)
@@ -315,7 +308,6 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			s.term = reply.Term
 			s.serverStatus = ServerStatus_FOLLOWER
 			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdated}
-			s.raftStateMutex.Unlock()
 			break
 		} else if !reply.Success {
 			// try again with smaller nextIndex
@@ -324,10 +316,8 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 		} else {
 			s.nextIndex[peerId] = int64(len(s.log))
 			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdated}
-			s.raftStateMutex.Unlock()
 			break
 		}
-		s.raftStateMutex.Unlock()
 		time.Sleep(200 * time.Millisecond)
 	}
 }

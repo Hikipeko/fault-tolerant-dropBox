@@ -91,9 +91,7 @@ func ServeRaftServer(server *RaftSurfstore) error {
 }
 
 func (s *RaftSurfstore) checkStatus() error {
-	s.serverStatusMutex.RLock()
 	serverStatus := s.serverStatus
-	s.serverStatusMutex.RUnlock()
 
 	if serverStatus == ServerStatus_CRASHED {
 		return ErrServerCrashed
