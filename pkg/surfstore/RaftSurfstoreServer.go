@@ -243,7 +243,7 @@ func (s *RaftSurfstore) majorityUpdated(peerUpdateStatuses []PeerUpdateStatus) b
 
 func (s *RaftSurfstore) sendPersistentHeartbeats(ctx context.Context) {
 	numServers := len(s.peers)
-	peerResponses := make(chan PeerStatusResponse)
+	peerResponses := make(chan PeerStatusResponse, 1000)
 	for idx := range s.peers {
 		idx := int64(idx)
 		if idx == s.id {
