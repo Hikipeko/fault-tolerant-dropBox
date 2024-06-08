@@ -49,10 +49,12 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 
 	serverStatusMutex := sync.RWMutex{}
 	raftStateMutex := sync.RWMutex{}
+	sendHeartbestMutex := sync.RWMutex{}
 
 	server := RaftSurfstore{
 		serverStatus:      ServerStatus_FOLLOWER,
 		serverStatusMutex: &serverStatusMutex,
+		sendHeartbestMutex: &sendHeartbestMutex,
 		term:              0,
 		metaStore:         NewMetaStore(config.BlockAddrs),
 		log:               make([]*UpdateOperation, 0),

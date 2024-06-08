@@ -26,7 +26,7 @@ func (surfClient *RPCClient) GetBlock(blockHash string, blockStoreAddr string, b
 	c := NewBlockStoreClient(conn)
 
 	// perform the call
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	b, err := c.GetBlock(ctx, &BlockHash{Hash: blockHash})
 	if err != nil {
@@ -49,7 +49,7 @@ func (surfClient *RPCClient) PutBlock(block *Block, blockStoreAddr string, succ 
 	c := NewBlockStoreClient(conn)
 
 	// perform the call
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	s, err := c.PutBlock(ctx, block)
 	if err != nil {
@@ -69,7 +69,7 @@ func (surfClient *RPCClient) MissingBlocks(blockHashesIn []string, blockStoreAdd
 	c := NewBlockStoreClient(conn)
 
 	// perform the call
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	bh, err := c.MissingBlocks(ctx, &BlockHashes{Hashes: blockHashesIn})
 	if err != nil {
@@ -87,7 +87,7 @@ func (surfClient *RPCClient) GetBlockHashes(blockStoreAddr string, blockHashes *
 	}
 	c := NewBlockStoreClient(conn)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	hashes, err := c.GetBlockHashes(ctx, &emptypb.Empty{})
 	if err != nil {
@@ -107,7 +107,7 @@ func (surfClient *RPCClient) GetFileInfoMap(serverFileInfoMap *map[string]*FileM
 		c := NewRaftSurfstoreClient(conn)
 
 		// perform the call
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		m, err := c.GetFileInfoMap(ctx, &emptypb.Empty{})
 
@@ -135,7 +135,7 @@ func (surfClient *RPCClient) UpdateFile(fileMetaData *FileMetaData, latestVersio
 		c := NewRaftSurfstoreClient(conn)
 
 		// perform the call
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		v, err := c.UpdateFile(ctx, fileMetaData)
 
@@ -163,7 +163,7 @@ func (surfClient *RPCClient) GetBlockStoreMap(blockHashesIn []string, blockStore
 		c := NewRaftSurfstoreClient(conn)
 
 		// perform the call
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		bsm, err := c.GetBlockStoreMap(ctx, &BlockHashes{Hashes: blockHashesIn})
 
@@ -193,7 +193,7 @@ func (surfClient *RPCClient) GetBlockStoreAddrs(blockStoreAddrs *[]string) error
 		c := NewRaftSurfstoreClient(conn)
 
 		// perform the call
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		a, err := c.GetBlockStoreAddrs(ctx, &emptypb.Empty{})
 

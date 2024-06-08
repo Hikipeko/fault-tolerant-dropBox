@@ -15,6 +15,7 @@ import (
 type RaftSurfstore struct {
 	serverStatus      ServerStatus
 	serverStatusMutex *sync.RWMutex
+	sendHeartbestMutex *sync.RWMutex
 	term              int64
 	log               []*UpdateOperation
 	id                int64
@@ -43,24 +44,35 @@ type RaftSurfstore struct {
 // 4. Return result to cliemt
 func (s *RaftSurfstore) GetFileInfoMap(ctx context.Context, empty *emptypb.Empty) (*FileInfoMap, error) {
 	// Ensure that the majority of servers are up
+	if err := s.checkStatus(); err != nil {
+		return nil, err
+	}
+	s.sendPersistentHeartbeats(ctx)
 	return s.metaStore.GetFileInfoMap(ctx, empty)
 }
 
 func (s *RaftSurfstore) GetBlockStoreMap(ctx context.Context, hashes *BlockHashes) (*BlockStoreMap, error) {
 	// Ensure that the majority of servers are up
+	if err := s.checkStatus(); err != nil {
+		return nil, err
+	}
+	s.sendPersistentHeartbeats(ctx)
 	return s.metaStore.GetBlockStoreMap(ctx, hashes)
-
 }
 
 func (s *RaftSurfstore) GetBlockStoreAddrs(ctx context.Context, empty *emptypb.Empty) (*BlockStoreAddrs, error) {
 	// Ensure that the majority of servers are up
+	if err := s.checkStatus(); err != nil {
+		return nil, err
+	}
+	s.sendPersistentHeartbeats(ctx)
 	return s.metaStore.GetBlockStoreAddrs(ctx, empty)
-
 }
 
 func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) (*Version, error) {
 	// Ensure that the request gets replicated on majority of the servers.
 	// Commit the entries and then apply to the state machine
+	log.Println("Server", s.id, "[UpdateFile]", filemeta)
 	if err := s.checkStatus(); err != nil {
 		return nil, err
 	}
@@ -75,12 +87,13 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	// for simplicity, make updatefile blocking
 	s.sendPersistentHeartbeats(ctx)
 
-	//TODO: Ensure that leader commits first and then applies to the state machine
+	// Ensure that leader commits first and then applies to the state machine
 	s.raftStateMutex.Lock()
-	s.commitIndex += 1
+	// TODO: need to commit multiple cases
+	s.commitIndex = int64(len(s.log)) - 1
+	s.lastApplied = int64(len(s.log)) - 1
 	s.raftStateMutex.Unlock()
 
-	//TODO: when can I update?
 	if entry.FileMetaData != nil {
 		return s.metaStore.UpdateFile(ctx, entry.FileMetaData)
 	}
@@ -101,8 +114,13 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 	s.raftStateMutex.RUnlock()
 
 	// 0. If server is crashed or unreachable
-	if sStatus == ServerStatus_CRASHED || unreachable {
-		return nil, status.Error(500, ErrServerCrashedUnreachable.Error())
+	if sStatus == ServerStatus_CRASHED {
+		log.Println("Server", sID, "[AppendEntries] Server Crashed")
+		return nil, status.Error(500, ErrServerCrashed.Error())
+	}
+	if unreachable {
+		log.Println("Server", sID, "[AppendEntries] Server Unreachable")
+		return nil, status.Error(501, ErrServerCrashedUnreachable.Error())
 	}
 	appendEntriesOutput := AppendEntryOutput{
 		Term:         sTerm,
@@ -113,6 +131,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 
 	// 1. Reply false if term < currentTerm (§5.1)
 	if input.Term < sTerm {
+		log.Println("Server", sID, "[AppendEntries] Sending output:", "Term", appendEntriesOutput.Term, "Id", appendEntriesOutput.ServerId, "Success", appendEntriesOutput.Success, "Matched Index", appendEntriesOutput.MatchedIndex)
 		appendEntriesOutput.Success = false
 		return &appendEntriesOutput, nil
 	}
@@ -140,6 +159,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 	}
 	s.raftStateMutex.RUnlock()
 	if !appendEntriesOutput.Success {
+		log.Println("Server", sID, "[AppendEntries] Sending output:", "Term", appendEntriesOutput.Term, "Id", appendEntriesOutput.ServerId, "Success", appendEntriesOutput.Success, "Matched Index", appendEntriesOutput.MatchedIndex)
 		return &appendEntriesOutput, nil
 	}
 	// 3. If an existing entry conflicts with a new one (same index but different
@@ -147,7 +167,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 	// 4. Append any new entries not already in the log
 	s.raftStateMutex.Lock()
 	s.log = append(s.log[:input.PrevLogIndex+1], input.Entries...)
-	log.Printf("Server %v [AppendEntries] log updated to %v", s.id, s.log)
+	// log.Printf("Server %v [AppendEntries] log updated to %v", s.id, s.log)
 
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index
 	// of last new entry)
@@ -155,7 +175,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 	for s.lastApplied < s.commitIndex {
 		entry := s.log[s.lastApplied+1]
 		if entry.FileMetaData != nil {
-			log.Println("Server", s.id, "[AppendEntries] apply update", entry.FileMetaData)
+			log.Println("Server", sID, "[AppendEntries] apply update", entry.FileMetaData)
 			_, err := s.metaStore.UpdateFile(ctx, entry.FileMetaData)
 			if err != nil {
 				s.raftStateMutex.Unlock()
@@ -164,7 +184,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 		}
 		s.lastApplied += 1
 	}
-	log.Println("Server", s.id, "[AppendEntries] Sending output:", "Term", appendEntriesOutput.Term, "Id", appendEntriesOutput.ServerId, "Success", appendEntriesOutput.Success, "Matched Index", appendEntriesOutput.MatchedIndex)
+	log.Println("Server", sID, "[AppendEntries] Sending output:", "Term", appendEntriesOutput.Term, "Id", appendEntriesOutput.ServerId, "Success", appendEntriesOutput.Success, "Matched Index", appendEntriesOutput.MatchedIndex)
 	s.raftStateMutex.Unlock()
 
 	return &appendEntriesOutput, nil
@@ -243,8 +263,10 @@ func (s *RaftSurfstore) sendPersistentHeartbeats(ctx context.Context) {
 	peerUpdateStatuses[s.id] = PeerUpdated
 	// proceed only if majority updated and no unknown/updating
 	for !s.majorityUpdated(peerUpdateStatuses) {
+		if err := s.checkStatus(); err != nil {
+			return
+		}
 		response := <-peerResponses
-		log.Println(response)
 		peerUpdateStatuses[response.id] = response.status
 	}
 }
@@ -271,15 +293,16 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			Entries:      s.log[nextIndex:len(s.log)],
 			LeaderCommit: s.commitIndex,
 		}
-		log.Printf("Server %v [sendToFollower] term: %v, LeaderId: %v, PrevLogTerm: %v, PrevLogIndex: %v, Entries: %v, LeaderCommit: %v", s.id, appendEntriesInput.Term, appendEntriesInput.LeaderId, appendEntriesInput.PrevLogTerm, appendEntriesInput.PrevLogIndex, appendEntriesInput.Entries, appendEntriesInput.LeaderCommit)
+		log.Printf("Server %v [sendToFollower %v] term: %v, LeaderId: %v, PrevLogTerm: %v, PrevLogIndex: %v, Entries: %v, LeaderCommit: %v", s.id, peerId, appendEntriesInput.Term, appendEntriesInput.LeaderId, appendEntriesInput.PrevLogTerm, appendEntriesInput.PrevLogIndex, appendEntriesInput.Entries, appendEntriesInput.LeaderCommit)
 		s.raftStateMutex.RUnlock()
 
-		reply, err := client.AppendEntries(ctx, &appendEntriesInput)
+		reply, err := client.AppendEntries(context.Background(), &appendEntriesInput)
 		// log.Println("Server", s.id, "[sendToFollower] Receiving output", "Term:", reply.Term, "Id:", reply.ServerId, "Success:", reply.Success, "Matched Index:", reply.MatchedIndex)
 
 		// response processing
 		s.raftStateMutex.Lock()
 		if err != nil {
+			// TODO: fix this
 			st, _ := status.FromError(err)
 			if st.Message() == ErrServerCrashed.Error() || st.Message() == ErrServerCrashedUnreachable.Error() {
 				peerResponses <- PeerStatusResponse{id: peerId, status: PeerUnreachable}
@@ -287,6 +310,13 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 				log.Println("Error is", err.Error())
 				panic("Should not happen")
 			}
+		} else if reply.Term > s.term {
+			// find a new term, become follower
+			s.term = reply.Term
+			s.serverStatus = ServerStatus_FOLLOWER
+			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdated}
+			s.raftStateMutex.Unlock()
+			break
 		} else if !reply.Success {
 			// try again with smaller nextIndex
 			s.nextIndex[peerId] -= 1
@@ -298,7 +328,7 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			break
 		}
 		s.raftStateMutex.Unlock()
-		time.Sleep(400 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
