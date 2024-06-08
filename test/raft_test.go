@@ -1,7 +1,9 @@
 package SurfTest
 
 import (
+	context "context"
 	"cse224/proj5/pkg/surfstore"
+	"fmt"
 	"testing"
 	"time"
 
@@ -171,7 +173,7 @@ func TestRaftNetworkPartitionWithConcurrentRequests(t *testing.T) {
 	}()
 
 	go func() {
-		<-time.NewTimer(5 * time.Second).C
+		<-time.NewTimer(10 * time.Second).C
 		blockChan <- true
 	}()
 
@@ -255,5 +257,192 @@ func TestRaftNetworkPartitionWithConcurrentRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Error checking state for server %d: %s", idx, err.Error())
 		}
+		fmt.Println(idx, server)
+		fmt.Println(state)
+		for _, l := range state.Log {
+			fmt.Println(l)
+		}
+	}
+}
+
+func TestRaftNetworkDuplicate(t *testing.T) {
+	// 	// A B C D E
+	cfgPath := "./config_files/5nodes.txt"
+	test := InitTest(cfgPath)
+	defer EndTest(test)
+
+	filemeta1 := &surfstore.FileMetaData{
+		Filename:      "testFile1",
+		Version:       1,
+		BlockHashList: nil,
+	}
+	filemeta2 := &surfstore.FileMetaData{
+		Filename:      "testFile2",
+		Version:       1,
+		BlockHashList: nil,
+	}
+
+	A := 0
+	C := 2
+	// D := 3
+	E := 4
+
+	// A is leader
+	leaderIdx := A
+	test.Clients[leaderIdx].SetLeader(test.Context, &emptypb.Empty{})
+	test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+
+	// Partition happens
+	// C D E are unreachable
+	unreachableFromServers := &surfstore.UnreachableFromServers{
+		ServerIds: []int64{0, 1},
+	}
+	for i := 3; i <= E; i++ {
+		test.Clients[i].MakeServerUnreachableFrom(test.Context, unreachableFromServers)
+	}
+
+	blockChan := make(chan bool)
+
+	// A gets an entry and pushes to A and B
+	go func() {
+		// This should block though and fail to commit when getting the RPC response from the new leader
+		_, _ = test.Clients[leaderIdx].UpdateFile(test.Context, filemeta1)
+		test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+		blockChan <- false
+	}()
+
+	go func() {
+		<-time.NewTimer(5 * time.Second).C
+		blockChan <- true
+	}()
+
+	if !(<-blockChan) {
+		fmt.Printf("Request did not block")
+	}
+
+	// C becomes leader
+	leaderIdx = C
+	test.Clients[leaderIdx].SetLeader(test.Context, &emptypb.Empty{})
+	test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+	time.Sleep(10 * time.Second)
+	// C D E are restored
+	for i := 3; i <= E; i++ {
+		test.Clients[i].MakeServerUnreachableFrom(test.Context, &surfstore.UnreachableFromServers{ServerIds: []int64{}})
+	}
+
+	test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+	time.Sleep(time.Second)
+
+	go func() {
+		test.Clients[leaderIdx].UpdateFile(test.Context, filemeta1)
+		test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+	}()
+	go func() {
+		test.Clients[leaderIdx].UpdateFile(test.Context, filemeta2)
+		test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+	}()
+
+	//Enough time for things to settle
+	time.Sleep(2 * time.Second)
+	test.Clients[leaderIdx].SendHeartbeat(test.Context, &emptypb.Empty{})
+
+	for idx, server := range test.Clients {
+		state, _ := server.GetInternalState(test.Context, &emptypb.Empty{})
+		fmt.Println(idx, server)
+		fmt.Println(state)
+		for _, l := range state.Log {
+			fmt.Println(l)
+		}
+	}
+}
+
+func TestSimpleCrash(t *testing.T) {
+	// A B C
+	cfgPath := "./config_files/3nodes.txt"
+	test := InitTest(cfgPath)
+	defer EndTest(test)
+
+	// A is leader
+	test.Clients[0].SetLeader(test.Context, &emptypb.Empty{})
+	test.Clients[0].SendHeartbeat(test.Context, &emptypb.Empty{})
+
+	// C crash
+	test.Clients[2].Crash(test.Context, &emptypb.Empty{})
+
+	// A update file, crash before sending heartbeat
+	filemeta1 := &surfstore.FileMetaData{
+		Filename:      "testFile1",
+		Version:       1,
+		BlockHashList: nil,
+	}
+	test.Clients[0].UpdateFile(test.Context, filemeta1)
+	// test.Clients[0].SendHeartbeat(test.Context, &emptypb.Empty{})
+	time.Sleep(30 * time.Second)
+	
+	// // C restore
+	test.Clients[2].Restore(test.Context, &emptypb.Empty{})
+	time.Sleep(time.Second)
+	showClients(test.Clients, test.Context)
+}
+
+func TestServerCrash(t *testing.T) {
+	cfgPath := "./config_files/5nodes.txt"
+	test := InitTest(cfgPath)
+	defer EndTest(test)
+
+	// A is leader
+	test.Clients[0].SetLeader(test.Context, &emptypb.Empty{})
+	test.Clients[0].SendHeartbeat(test.Context, &emptypb.Empty{})
+	time.Sleep(time.Second)
+
+	// C crash
+	test.Clients[2].Crash(test.Context, &emptypb.Empty{})
+
+	// A update file, crash before sending heartbeat
+	filemeta1 := &surfstore.FileMetaData{
+		Filename:      "testFile1",
+		Version:       1,
+		BlockHashList: nil,
+	}
+	test.Clients[0].UpdateFile(test.Context, filemeta1)
+	test.Clients[0].Crash(test.Context, &emptypb.Empty{})
+	time.Sleep(time.Second)
+
+	// C restored
+	test.Clients[2].Restore(test.Context, &emptypb.Empty{})
+
+	// B is leader and get request
+	test.Clients[1].SetLeader(test.Context, &emptypb.Empty{})
+	test.Clients[1].SendHeartbeat(test.Context, &emptypb.Empty{})
+	time.Sleep(time.Second)
+
+	filemeta2 := &surfstore.FileMetaData{
+		Filename:      "testFile2",
+		Version:       1,
+		BlockHashList: nil,
+	}
+	test.Clients[1].UpdateFile(test.Context, filemeta2)
+	time.Sleep(time.Second)
+
+	// A restored
+	test.Clients[0].Restore(test.Context, &emptypb.Empty{})
+	test.Clients[1].SendHeartbeat(test.Context, &emptypb.Empty{})
+	time.Sleep(time.Second)
+
+	showClients(test.Clients, test.Context)
+}
+
+func showClients(clients []surfstore.RaftSurfstoreClient, ctx context.Context) {
+	for idx, server := range clients {
+		state, _ := server.GetInternalState(ctx, &emptypb.Empty{})
+		fmt.Println("Server: ", idx, "=================================")
+		fmt.Println("Status: ", state.Status)
+		fmt.Println("CommitIndex: ", state.CommitIndex)
+		fmt.Println("Term: ", state.Term)
+		fmt.Println("Log: {")
+		for _, l := range state.Log {
+			fmt.Println("  ", l)
+		}
+		fmt.Println("}")
 	}
 }

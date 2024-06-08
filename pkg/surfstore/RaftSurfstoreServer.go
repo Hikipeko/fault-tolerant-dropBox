@@ -86,12 +86,17 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	s.sendPersistentHeartbeats(ctx)
 
 	// Ensure that leader commits first and then applies to the state machine
-	// TODO: need to commit multiple cases
 	s.commitIndex = int64(len(s.log)) - 1
-	s.lastApplied = int64(len(s.log)) - 1
 
-	if entry.FileMetaData != nil {
-		return s.metaStore.UpdateFile(ctx, entry.FileMetaData)
+	for s.lastApplied < s.commitIndex {
+		entry := s.log[s.lastApplied+1]
+		if entry.FileMetaData != nil {
+			_, err := s.metaStore.UpdateFile(ctx, entry.FileMetaData)
+			if err != nil {
+				return nil, err
+			}
+		}
+		s.lastApplied += 1
 	}
 	// called by setLeader
 	return nil, nil
@@ -171,7 +176,7 @@ func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInp
 	for s.lastApplied < s.commitIndex {
 		entry := s.log[s.lastApplied+1]
 		if entry.FileMetaData != nil {
-			log.Println("Server", sID, "[AppendEntries] apply update", entry.FileMetaData)
+			log.Println("!!!!!Server", sID, "[AppendEntries] apply update", entry.FileMetaData)
 			_, err := s.metaStore.UpdateFile(ctx, entry.FileMetaData)
 			if err != nil {
 				s.raftStateMutex.Unlock()
@@ -263,7 +268,7 @@ func (s *RaftSurfstore) sendPersistentHeartbeats(ctx context.Context) {
 			return
 		}
 		response := <-peerResponses
-		log.Print("receive response:", response)
+		// log.Print("receive response:", response)
 		peerUpdateStatuses[response.id] = response.status
 		if err := s.checkStatus(); err != nil {
 			return
