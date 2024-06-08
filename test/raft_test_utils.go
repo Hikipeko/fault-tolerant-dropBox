@@ -79,7 +79,7 @@ func InitBlockStores(blockStoreAddrs []string) []*exec.Cmd {
 	blockCmdList := make([]*exec.Cmd, 0)
 	for _, addr := range blockStoreAddrs {
 		port := strings.Split(addr, ":")[1]
-		blockCmd := exec.Command("_bin/SurfstoreServerExec", "-s", "block", "-p", port, "-l")
+		blockCmd := exec.Command("_bin/SurfstoreServerExec", "-d", "-s", "block", "-p", port, "-l")
 		blockCmd.Stderr = os.Stderr
 		blockCmd.Stdout = os.Stdout
 		err := blockCmd.Start()
@@ -96,7 +96,7 @@ func InitRaftServers(cfgPath string, cfg surfstore.RaftConfig) []*exec.Cmd {
 	cmdList := make([]*exec.Cmd, 0)
 	for idx := range cfg.RaftAddrs {
 
-		cmd := exec.Command("_bin/SurfstoreRaftServerExec", "-f", cfgPath, "-i", strconv.Itoa(idx))
+		cmd := exec.Command("_bin/SurfstoreRaftServerExec", "-d", "-f", cfgPath, "-i", strconv.Itoa(idx))
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
 		cmdList = append(cmdList, cmd)

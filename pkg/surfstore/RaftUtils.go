@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net"
 	"os"
 	"sync"
 
@@ -64,12 +65,41 @@ func NewRaftServer(id int64, config RaftConfig) (*RaftSurfstore, error) {
 		rpcConns:        conns,
 
 		raftStateMutex: &raftStateMutex,
+
+		//New Additions
+		peers:           config.RaftAddrs,
+		pendingRequests: make([]*chan PendingRequest, 0),
+		lastApplied:     -1,
+		nextIndex:       make([]int64, 0),
 	}
 
 	return &server, nil
 }
 
-// TODO Start up the Raft server and any services here
 func ServeRaftServer(server *RaftSurfstore) error {
-	panic("todo")
+	RegisterRaftSurfstoreServer(server.grpcServer, server)
+
+	log.Println("Successfully started the RAFT server with id:", server.id)
+	l, e := net.Listen("tcp", server.peers[server.id])
+
+	if e != nil {
+		return e
+	}
+	return server.grpcServer.Serve(l)
+}
+
+func (s *RaftSurfstore) checkStatus() error {
+	s.serverStatusMutex.RLock()
+	serverStatus := s.serverStatus
+	s.serverStatusMutex.RUnlock()
+
+	if serverStatus == ServerStatus_CRASHED {
+		return ErrServerCrashed
+	}
+
+	if serverStatus != ServerStatus_LEADER {
+		return ErrNotLeader
+	}
+
+	return nil
 }

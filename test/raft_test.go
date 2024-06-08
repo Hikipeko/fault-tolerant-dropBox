@@ -18,7 +18,7 @@ func TestRaftSetLeader(t *testing.T) {
 	leaderIdx := 0
 	test.Clients[leaderIdx].SetLeader(test.Context, &emptypb.Empty{})
 
-	// heartbeat
+	// // heartbeat
 	for _, server := range test.Clients {
 		server.SendHeartbeat(test.Context, &emptypb.Empty{})
 	}
