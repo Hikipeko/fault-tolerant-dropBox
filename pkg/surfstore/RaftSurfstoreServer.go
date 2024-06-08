@@ -86,20 +86,11 @@ func (s *RaftSurfstore) UpdateFile(ctx context.Context, filemeta *FileMetaData) 
 	s.sendPersistentHeartbeats(ctx)
 
 	// Ensure that leader commits first and then applies to the state machine
-	s.commitIndex = int64(len(s.log)) - 1
+	s.commitIndex += 1
+	s.lastApplied += 1
+	log.Println("!!!!!Server", s.id, "[AppendEntries] apply update", entry.FileMetaData)
+	return s.metaStore.UpdateFile(ctx, entry.FileMetaData)
 
-	for s.lastApplied < s.commitIndex {
-		entry := s.log[s.lastApplied+1]
-		if entry.FileMetaData != nil {
-			_, err := s.metaStore.UpdateFile(ctx, entry.FileMetaData)
-			if err != nil {
-				return nil, err
-			}
-		}
-		s.lastApplied += 1
-	}
-	// called by setLeader
-	return nil, nil
 }
 
 func (s *RaftSurfstore) AppendEntries(ctx context.Context, input *AppendEntryInput) (*AppendEntryOutput, error) {
@@ -216,7 +207,23 @@ func (s *RaftSurfstore) SetLeader(ctx context.Context, _ *emptypb.Empty) (*Succe
 	}
 
 	s.raftStateMutex.Unlock()
-	s.UpdateFile(ctx, nil)
+
+	// UpdateFile
+	s.log = append(s.log, & UpdateOperation{Term: s.term, FileMetaData: nil, })
+	s.sendPersistentHeartbeats(ctx)
+	s.commitIndex = int64(len(s.log)) - 1
+
+	for s.lastApplied < s.commitIndex {
+		entry := s.log[s.lastApplied+1]
+		if entry.FileMetaData != nil {
+			log.Println("!!!!!Server", s.id, "[AppendEntries] apply update", entry.FileMetaData)
+			_, err := s.metaStore.UpdateFile(ctx, entry.FileMetaData)
+			if err != nil {
+				return nil, err
+			}
+		}
+		s.lastApplied += 1
+	}
 	return &Success{Flag: true}, nil
 }
 
