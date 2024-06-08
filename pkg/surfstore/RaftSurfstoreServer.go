@@ -243,7 +243,7 @@ func (s *RaftSurfstore) majorityUpdated(peerUpdateStatuses []PeerUpdateStatus) b
 
 func (s *RaftSurfstore) sendPersistentHeartbeats(ctx context.Context) {
 	numServers := len(s.peers)
-	peerResponses := make(chan PeerStatusResponse, 1000)
+	peerResponses := make(chan PeerStatusResponse, len(s.log) + 1000)
 	for idx := range s.peers {
 		idx := int64(idx)
 		if idx == s.id {
@@ -291,7 +291,6 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 		log.Printf("Server %v [sendToFollower %v] term: %v, LeaderId: %v, PrevLogTerm: %v, PrevLogIndex: %v, Entries: %v, LeaderCommit: %v", s.id, peerId, appendEntriesInput.Term, appendEntriesInput.LeaderId, appendEntriesInput.PrevLogTerm, appendEntriesInput.PrevLogIndex, appendEntriesInput.Entries, appendEntriesInput.LeaderCommit)
 
 		reply, err := client.AppendEntries(context.Background(), &appendEntriesInput)
-		// log.Println("Server", s.id, "[sendToFollower] Receiving output", "Term:", reply.Term, "Id:", reply.ServerId, "Success:", reply.Success, "Matched Index:", reply.MatchedIndex)
 
 		// response processing
 		if err != nil {
@@ -303,6 +302,7 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 				log.Println("Error is", err.Error())
 				panic("Should not happen")
 			}
+			time.Sleep(200 * time.Millisecond)
 		} else if reply.Term > s.term {
 			// find a new term, become follower
 			s.term = reply.Term
@@ -318,7 +318,6 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdated}
 			break
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
 }
 
