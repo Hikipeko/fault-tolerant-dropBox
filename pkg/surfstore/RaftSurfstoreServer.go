@@ -243,7 +243,7 @@ func (s *RaftSurfstore) majorityUpdated(peerUpdateStatuses []PeerUpdateStatus) b
 
 func (s *RaftSurfstore) sendPersistentHeartbeats(ctx context.Context) {
 	numServers := len(s.peers)
-	peerResponses := make(chan PeerStatusResponse, len(s.log) + 1000)
+	peerResponses := make(chan PeerStatusResponse, len(s.log) + 3)
 	for idx := range s.peers {
 		idx := int64(idx)
 		if idx == s.id {
@@ -263,7 +263,35 @@ func (s *RaftSurfstore) sendPersistentHeartbeats(ctx context.Context) {
 			return
 		}
 		response := <-peerResponses
+		log.Print("receive response:", response)
 		peerUpdateStatuses[response.id] = response.status
+		if err := s.checkStatus(); err != nil {
+			return
+		}
+	}
+	go s.receivePendingResponse(peerUpdateStatuses, peerResponses)
+}
+
+func (s *RaftSurfstore) allUpdated(peerUpdateStatuses []PeerUpdateStatus) bool {
+	for _, peerUpdateStatus := range peerUpdateStatuses {
+		if peerUpdateStatus != PeerUpdated {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *RaftSurfstore) receivePendingResponse(peerUpdateStatuses []PeerUpdateStatus, peerResponses chan PeerStatusResponse) {
+	for !s.allUpdated(peerUpdateStatuses) {
+		if err := s.checkStatus(); err != nil {
+			return
+		}
+		response := <-peerResponses
+		log.Print("receive response:", response)
+		peerUpdateStatuses[response.id] = response.status
+		if err := s.checkStatus(); err != nil {
+			return
+		}
 	}
 }
 
@@ -297,6 +325,7 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			// TODO: fix this
 			st, _ := status.FromError(err)
 			if st.Message() == ErrServerCrashed.Error() || st.Message() == ErrServerCrashedUnreachable.Error() {
+				// log.Println("Send response 1", PeerStatusResponse{id: peerId, status: PeerUnreachable})
 				peerResponses <- PeerStatusResponse{id: peerId, status: PeerUnreachable}
 			} else {
 				log.Println("Error is", err.Error())
@@ -307,14 +336,17 @@ func (s *RaftSurfstore) sendToFollower(ctx context.Context, peerId int64, peerRe
 			// find a new term, become follower
 			s.term = reply.Term
 			s.serverStatus = ServerStatus_FOLLOWER
+			// log.Println("Send response 2", PeerStatusResponse{id: peerId, status: PeerUpdated})
 			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdated}
 			break
 		} else if !reply.Success {
 			// try again with smaller nextIndex
 			s.nextIndex[peerId] -= 1
+			// log.Println("Send response 3", PeerStatusResponse{id: peerId, status: PeerUpdated})
 			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdating}
 		} else {
 			s.nextIndex[peerId] = int64(len(s.log))
+			// log.Println("Send response 4", PeerStatusResponse{id: peerId, status: PeerUpdated})
 			peerResponses <- PeerStatusResponse{id: peerId, status: PeerUpdated}
 			break
 		}
